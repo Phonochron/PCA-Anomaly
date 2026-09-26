@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import FileUpload from './components/FileUpload';
 import RunControls from './components/RunControls';
 import Scatter3D from './components/Scatter3D';
@@ -9,6 +9,17 @@ import './App.css';
 export default function App() {
   const [uploadResult, setUploadResult] = useState(null);
   const [runResult, setRunResult] = useState(null);
+  const uploadRevision = useRef(0);
+
+  const handleUploadStart = () => {
+    uploadRevision.current += 1;
+    setUploadResult(null);
+    setRunResult(null);
+  };
+
+  const handleRunSuccess = (result, revision) => {
+    if (revision === uploadRevision.current) setRunResult(result);
+  };
 
   return (
     <div className="app">
@@ -18,8 +29,17 @@ export default function App() {
       </header>
 
       <main className="main">
-        <FileUpload onUploadSuccess={setUploadResult} />
-        <RunControls uploadResult={uploadResult} onRunSuccess={setRunResult} />
+        <FileUpload
+          onUploadStart={handleUploadStart}
+          onUploadSuccess={setUploadResult}
+        />
+        <RunControls
+          key={uploadRevision.current}
+          uploadResult={uploadResult}
+          uploadRevision={uploadRevision.current}
+          onRunStart={() => setRunResult(null)}
+          onRunSuccess={handleRunSuccess}
+        />
 
         {runResult && (
           <>
@@ -33,18 +53,15 @@ export default function App() {
               <Scatter3D
                 points3d={runResult.points_3d}
                 labels={runResult.labels}
-                rowIndices={runResult.row_indices}
-                reconstructionErrors={runResult.reconstruction_errors}
                 anomalyDetails={runResult.anomaly_details}
               />
             </section>
 
             <AnomalyTable
               anomalyDetails={runResult.anomaly_details}
-              featureNames={runResult.feature_names}
             />
 
-            <DownloadSection />
+            <DownloadSection datasetId={uploadResult.dataset_id} />
           </>
         )}
       </main>

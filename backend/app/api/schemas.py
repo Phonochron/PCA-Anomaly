@@ -9,13 +9,14 @@ class UploadResponse(BaseModel):
     n_features: int = 0
     feature_columns: list[str] = Field(default_factory=list)
     label_column: str | None = None
+    dataset_id: str | None = None
     error: str | None = None
 
 
 class RunRequest(BaseModel):
     """Request to run PCA anomaly detection (after upload)."""
 
-    n_components: int | None = Field(default=3, description="Number of components; null = auto (95% variance)")
+    n_components: int | None = Field(default=None, ge=1, description="Number of components; null = auto (95% variance)")
     threshold_percentile: float = Field(default=95.0, ge=1.0, le=99.99)
 
 

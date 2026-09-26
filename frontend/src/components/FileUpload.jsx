@@ -45,7 +45,7 @@ const PRESETS = [
   }
 ];
 
-export default function FileUpload({ onUploadSuccess }) {
+export default function FileUpload({ onUploadStart, onUploadSuccess }) {
   const [file, setFile] = useState(null);
   const [labelColumn, setLabelColumn] = useState('');
   const [selectedPresetId, setSelectedPresetId] = useState(null);
@@ -87,6 +87,7 @@ export default function FileUpload({ onUploadSuccess }) {
       setError('Please select or upload a CSV file.');
       return;
     }
+    onUploadStart();
     setLoading(true);
     setError(null);
     try {

@@ -131,7 +131,8 @@ The notebook resolves `DATA_DIR` to `datasets/` automatically. No absolute paths
 │   │   └── services/
 │   │       ├── data_loader.py
 │   │       ├── pca_anomaly.py  # PCA fit, Q-score, threshold
-│   │       └── explainer.py    # Per-row feature contributions
+│   │       ├── explainer.py    # Per-row feature contributions
+│   │       └── dataset_store.py # Short-lived dataset IDs
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
@@ -166,6 +167,8 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 API docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 
+The backend allows `http://localhost:5173` and `http://127.0.0.1:5173` by default. For another frontend origin, copy `backend/.env.example` to `backend/.env` and set `CORS_ORIGINS` to a JSON array of exact origins.
+
 #### Terminal 2 — Frontend
 
 ```bash
@@ -175,6 +178,8 @@ npm run dev
 ```
 
 Open [http://localhost:5173](http://localhost:5173). Vite proxies `/api` to the backend.
+
+The frontend uses `/api` in development. `frontend/.env.production` sets the existing Render backend URL for production builds. Set `VITE_API_BASE_URL` at build time when deploying against another backend; include the `/api` suffix. Add the deployed frontend origin to backend `CORS_ORIGINS`.
 
 ### Usage flow
 
@@ -188,10 +193,12 @@ Open [http://localhost:5173](http://localhost:5173). Vite proxies `/api` to the 
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/upload` | Upload CSV (`multipart/form-data`: `file`, optional `label_column`, `encoding`) |
-| `POST` | `/api/run` | Run detection (`n_components`, `threshold_percentile`) |
-| `GET` | `/api/download/cleaned` | Export rows labelled normal |
-| `GET` | `/api/download/anomalies` | Export rows labelled anomalous |
+| `POST` | `/api/upload` | Upload CSV (`multipart/form-data`: `file`, optional `label_column`, `encoding`); returns `dataset_id` |
+| `POST` | `/api/run` | Run detection (`n_components`, `threshold_percentile`); requires `X-Dataset-ID` header |
+| `GET` | `/api/download/cleaned` | Export normal rows; requires `X-Dataset-ID` header |
+| `GET` | `/api/download/anomalies` | Export anomalous rows; requires `X-Dataset-ID` header |
+
+Use the `dataset_id` returned by `/api/upload` as the `X-Dataset-ID` header for the other endpoints. Treat it as a private access token for that dataset. Unknown or expired IDs return `404`.
 
 Interactive schema: [http://localhost:8000/docs](http://localhost:8000/docs)
 
@@ -223,16 +230,32 @@ This repo uses **separate dependency files** per part — do not merge them into
 Shared ML libraries (`numpy`, `pandas`, `scikit-learn`) are pinned to the same versions in both Python files where possible.
 
 - Python **3.11+** recommended for the backend
-- Node.js **18+** for the frontend
+- Node.js **22+** recommended for the frontend and its lint tooling
 
 ---
 
 ## Development notes
 
-- **CORS:** The backend allows all origins in development (`backend/app/main.py`). Restrict `allow_origins` before production deployment.
-- **In-memory state:** Uploaded CSVs are held in memory on the server between `/upload` and `/run`. Restarting the backend clears session data.
+- **CORS:** The backend allows only origins listed in `CORS_ORIGINS` (`backend/app/config.py`). Production deployments must include their exact frontend origin.
+- **In-memory state:** Each upload gets a separate dataset ID. Sessions expire after 1 hour without access; the store keeps at most 20 datasets and evicts the least recently used when full. A restart clears them all. This process-local store requires a single backend worker; use shared storage before scaling to multiple workers or instances.
 - **Presets:** Run `python scratch/generate_presets.py` to regenerate demo CSVs in `frontend/public/presets/`.
 - **Large datasets:** Credit Card and NSL-KDD are included for the experiment; the web app enforces an upload size limit (see `backend/app/config.py`).
+
+### Quality checks
+
+Run these from each directory after installing its dependencies:
+
+```bash
+# backend/
+pip install -r requirements-dev.txt
+python -m unittest discover -s tests -v
+python -m ruff check app tests
+
+# frontend/
+npm ci
+npm run lint
+npm run build
+```
 
 ---
 

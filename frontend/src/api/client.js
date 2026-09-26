@@ -1,90 +1,66 @@
-// Menggunakan API lokal jika dijalankan di localhost, atau API Render jika di production
-const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-  ? '/api'
-  : 'https://machine-learning-pca-backend.onrender.com/api';
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || '/api').trim().replace(/\/+$/, '');
 
-/**
- * Upload CSV file to the backend on Render.
- */
+function datasetHeaders(datasetId) {
+  if (!datasetId) throw new Error('Upload a CSV first.');
+  return { 'X-Dataset-ID': datasetId };
+}
+
+async function ensureOk(response, fallbackMessage) {
+  if (response.ok) return;
+  const payload = await response.json().catch(() => ({}));
+  const message = typeof payload.detail === 'string' ? payload.detail : fallbackMessage;
+  throw new Error(message);
+}
+
 export async function uploadCsv(file, labelColumn = null, encoding = 'utf-8') {
   const form = new FormData();
   form.append('file', file);
   if (labelColumn) form.append('label_column', labelColumn);
   form.append('encoding', encoding);
 
-  // Sekarang fetch akan menembak ke: https://machine-learning-pca-backend.onrender.com/api/upload
-  const res = await fetch(`${API_BASE}/upload`, {
+  const response = await fetch(`${API_BASE}/upload`, {
     method: 'POST',
     body: form,
   });
-  
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || 'Upload failed');
-  }
-  return res.json();
+  await ensureOk(response, 'Upload failed');
+  return response.json();
 }
 
-/**
- * Run PCA anomaly detection.
- */
-export async function runAnomalyDetection(options = {}) {
-  const { n_components = 3, threshold_percentile = 95 } = options;
-  const body = {
-    threshold_percentile: Number(threshold_percentile),
-  };
-  
-  if (n_components === 'auto' || n_components === null || n_components === undefined) {
-    body.n_components = null;
-  } else {
-    body.n_components = Number(n_components);
-  }
-
-  const res = await fetch(`${API_BASE}/run`, {
+export async function runAnomalyDetection(datasetId, options = {}) {
+  const { n_components = null, threshold_percentile = 95 } = options;
+  const response = await fetch(`${API_BASE}/run`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    headers: {
+      ...datasetHeaders(datasetId),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      n_components: n_components == null ? null : Number(n_components),
+      threshold_percentile: Number(threshold_percentile),
+    }),
   });
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || 'Run failed');
-  }
-  return res.json();
+  await ensureOk(response, 'Run failed');
+  return response.json();
 }
 
-/**
- * Download CSV of the dataset with anomaly rows removed (normal rows only).
- */
-export async function downloadCleanedCsv() {
-  const res = await fetch(`${API_BASE}/download/cleaned`);
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || 'Download failed');
-  }
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'cleaned_normal_only.csv';
-  a.click();
+async function downloadCsv(datasetId, path, filename) {
+  const response = await fetch(`${API_BASE}/download/${path}`, {
+    headers: datasetHeaders(datasetId),
+  });
+  await ensureOk(response, 'Download failed');
+
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
   URL.revokeObjectURL(url);
 }
 
-/**
- * Download CSV containing only the rows classified as anomalies.
- */
-export async function downloadAnomaliesCsv() {
-  const res = await fetch(`${API_BASE}/download/anomalies`);
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || 'Download failed');
-  }
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'anomalies_only.csv';
-  a.click();
-  URL.revokeObjectURL(url);
+export function downloadCleanedCsv(datasetId) {
+  return downloadCsv(datasetId, 'cleaned', 'cleaned_normal_only.csv');
+}
+
+export function downloadAnomaliesCsv(datasetId) {
+  return downloadCsv(datasetId, 'anomalies', 'anomalies_only.csv');
 }

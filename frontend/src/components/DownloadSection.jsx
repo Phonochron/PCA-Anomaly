@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { downloadCleanedCsv, downloadAnomaliesCsv } from '../api/client';
 import styles from './DownloadSection.module.css';
 
-export default function DownloadSection() {
+export default function DownloadSection({ datasetId }) {
   const [loading, setLoading] = useState(null);
   const [error, setError] = useState(null);
 
@@ -10,7 +10,7 @@ export default function DownloadSection() {
     setError(null);
     setLoading('cleaned');
     try {
-      await downloadCleanedCsv();
+      await downloadCleanedCsv(datasetId);
     } catch (e) {
       setError(e.message || 'Download failed');
     } finally {
@@ -22,7 +22,7 @@ export default function DownloadSection() {
     setError(null);
     setLoading('anomalies');
     try {
-      await downloadAnomaliesCsv();
+      await downloadAnomaliesCsv(datasetId);
     } catch (e) {
       setError(e.message || 'Download failed');
     } finally {

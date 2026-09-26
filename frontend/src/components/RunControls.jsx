@@ -2,25 +2,35 @@ import { useState } from 'react';
 import { runAnomalyDetection } from '../api/client';
 import styles from './RunControls.module.css';
 
-export default function RunControls({ uploadResult, onRunSuccess }) {
+export default function RunControls({
+  uploadResult,
+  uploadRevision,
+  onRunStart,
+  onRunSuccess,
+}) {
   const [autoComponents, setAutoComponents] = useState(true);
   const [nComponents, setNComponents] = useState(3);
   const [threshold, setThreshold] = useState(95);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [lastUsedComponents, setLastUsedComponents] = useState(null);
+  const maxComponents = uploadResult
+    ? Math.max(1, Math.min(20, uploadResult.n_features - 1))
+    : 1;
 
   const handleRun = async (e) => {
     e.preventDefault();
+    const revision = uploadRevision;
+    onRunStart();
     setLoading(true);
     setError(null);
     try {
-      const result = await runAnomalyDetection({
-        n_components: autoComponents ? 'auto' : nComponents,
+      const result = await runAnomalyDetection(uploadResult.dataset_id, {
+        n_components: autoComponents ? null : nComponents,
         threshold_percentile: threshold,
       });
       setLastUsedComponents(result.n_components_used ?? null);
-      onRunSuccess(result);
+      onRunSuccess(result, revision);
     } catch (err) {
       setError(err.message || 'Run failed');
     } finally {
@@ -42,7 +52,12 @@ export default function RunControls({ uploadResult, onRunSuccess }) {
                 <input
                   type="checkbox"
                   checked={autoComponents}
-                  onChange={(e) => setAutoComponents(e.target.checked)}
+                  onChange={(e) => {
+                    setAutoComponents(e.target.checked);
+                    if (!e.target.checked) {
+                      setNComponents(Math.min(3, maxComponents));
+                    }
+                  }}
                   className={styles.checkbox}
                 />
                 Auto (95% variance)
@@ -52,7 +67,7 @@ export default function RunControls({ uploadResult, onRunSuccess }) {
               <input
                 type="number"
                 min={1}
-                max={Math.min(20, uploadResult.n_features)}
+                max={maxComponents}
                 value={nComponents}
                 onChange={(e) => setNComponents(Number(e.target.value))}
                 className={styles.input}

@@ -1,7 +1,7 @@
-import io
-import pandas as pd
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+"""Upload, analyze, and export datasets through short-lived IDs."""
+
+from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
+from fastapi.responses import Response
 
 from app.api.schemas import (
     AnomalyRowDetail,
@@ -16,14 +16,20 @@ from app.services import (
     load_and_validate_csv,
     run_pca_anomaly,
 )
+from app.services.dataset_store import DatasetSession, DatasetStore
 
 router = APIRouter(prefix="/api", tags=["pca-anomaly"])
+dataset_store = DatasetStore(
+    max_sessions=settings.max_datasets_in_memory,
+    ttl_seconds=settings.dataset_ttl_seconds,
+)
 
-# In-memory store (Catatan: Ini akan terhapus jika Render melakukan restart/spin down)
-_current_df = None
-_current_feature_columns: list[str] = []
-_current_label_column: str | None = None
-_current_labels: list[int] | None = None 
+
+def get_dataset(dataset_id: str) -> DatasetSession:
+    session = dataset_store.get(dataset_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Dataset not found or expired. Upload it again.")
+    return session
 
 
 @router.post("/upload", response_model=UploadResponse)
@@ -32,8 +38,6 @@ async def upload_csv(
     label_column: str | None = Form(None),
     encoding: str = Form("utf-8"),
 ):
-    global _current_df, _current_feature_columns, _current_label_column
-
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="File must be a CSV.")
 
@@ -47,11 +51,10 @@ async def upload_csv(
 
     result = load_and_validate_csv(
         content,
-        file.filename or "upload.csv",
+        file.filename,
         label_column=label_column,
         encoding=encoding,
     )
-
     if result.error:
         return UploadResponse(
             success=False,
@@ -62,68 +65,54 @@ async def upload_csv(
             label_column=result.label_column,
         )
 
-    _current_df = result.df
-    _current_feature_columns = result.feature_columns
-    _current_label_column = result.label_column
-    _current_labels = None 
-
+    dataset_id = dataset_store.create(
+        result.df, result.feature_columns, result.label_column
+    )
     return UploadResponse(
         success=True,
         n_rows=result.n_rows,
         n_features=result.n_features,
         feature_columns=result.feature_columns,
         label_column=result.label_column,
+        dataset_id=dataset_id,
     )
+
 
 @router.post("/run", response_model=RunResponse)
-async def run_anomaly_detection(body: RunRequest | None = None):
-    global _current_df, _current_feature_columns, _current_label_column, _current_labels
-
-    if _current_df is None or not _current_feature_columns:
-        raise HTTPException(
-            status_code=400,
-            detail="Upload a CSV first via POST /api/upload.",
-        )
+async def run_anomaly_detection(
+    body: RunRequest | None = None,
+    dataset_id: str = Header(..., alias="X-Dataset-ID"),
+):
+    session = get_dataset(dataset_id)
+    session.labels = None  # A failed rerun must not leave an old export available.
 
     opts = body or RunRequest()
-    n_components_arg = opts.n_components 
-    if n_components_arg is not None:
-        n_components_arg = min(
-            n_components_arg,
-            len(_current_feature_columns),
-            len(_current_df),
+    try:
+        result = run_pca_anomaly(
+            df=session.df,
+            feature_columns=session.feature_columns,
+            label_column=session.label_column,
+            n_components=opts.n_components,
+            threshold_percentile=opts.threshold_percentile,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    result = run_pca_anomaly(
-        df=_current_df,
-        feature_columns=_current_feature_columns,
-        label_column=_current_label_column,
-        n_components=n_components_arg,
-        threshold_percentile=opts.threshold_percentile,
-    )
-    n_components_used = result.n_components_used
-
-    details = get_feature_contributions(
-        df=_current_df,
-        feature_columns=_current_feature_columns,
-        label_column=_current_label_column,
-        n_components=n_components_used,
-        threshold_percentile=opts.threshold_percentile,
-        top_k=5,
-    )
-
+    details = get_feature_contributions(result, top_k=5)
     anomaly_details = [
         AnomalyRowDetail(
-            row_index=d["row_index"],
-            is_anomaly=d["is_anomaly"],
-            reconstruction_error=d["reconstruction_error"],
-            top_features=[TopFeature(name=t["name"], contribution=t["contribution"]) for t in d["top_features"]],
+            row_index=detail["row_index"],
+            is_anomaly=detail["is_anomaly"],
+            reconstruction_error=detail["reconstruction_error"],
+            top_features=[
+                TopFeature(name=feature["name"], contribution=feature["contribution"])
+                for feature in detail["top_features"]
+            ],
         )
-        for d in details
+        for detail in details
     ]
 
-    _current_labels = result.labels
-
+    session.labels = result.labels
     return RunResponse(
         points_3d=result.points_3d,
         reconstruction_errors=result.reconstruction_errors,
@@ -133,38 +122,28 @@ async def run_anomaly_detection(body: RunRequest | None = None):
         feature_names=result.feature_names,
         explained_variance_ratio=result.explained_variance_ratio,
         ground_truth=result.ground_truth,
-        n_components_used=n_components_used,
+        n_components_used=result.n_components_used,
         anomaly_details=anomaly_details,
     )
 
-@router.get("/download/cleaned")
-async def download_cleaned_csv():
-    global _current_df, _current_labels
-    if _current_df is None or _current_labels is None:
-        raise HTTPException(status_code=400, detail="Upload a CSV and run PCA first.")
-    
-    mask = [l == 0 for l in _current_labels]
-    cleaned = _current_df.loc[mask]
-    buf = io.StringIO()
-    cleaned.to_csv(buf, index=False)
-    return StreamingResponse(
-        io.BytesIO(buf.getvalue().encode()),
+
+def csv_response(session: DatasetSession, label: int, filename: str) -> Response:
+    if session.labels is None:
+        raise HTTPException(status_code=400, detail="Run PCA before downloading results.")
+
+    rows = session.df.loc[[value == label for value in session.labels]]
+    return Response(
+        content=rows.to_csv(index=False),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=cleaned_normal_only.csv"},
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 
+
+@router.get("/download/cleaned")
+async def download_cleaned_csv(dataset_id: str = Header(..., alias="X-Dataset-ID")):
+    return csv_response(get_dataset(dataset_id), 0, "cleaned_normal_only.csv")
+
+
 @router.get("/download/anomalies")
-async def download_anomalies_csv():
-    global _current_df, _current_labels
-    if _current_df is None or _current_labels is None:
-        raise HTTPException(status_code=400, detail="Upload a CSV and run PCA first.")
-    
-    mask = [l == 1 for l in _current_labels]
-    anomalies = _current_df.loc[mask]
-    buf = io.StringIO()
-    anomalies.to_csv(buf, index=False)
-    return StreamingResponse(
-        io.BytesIO(buf.getvalue().encode()),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=anomalies_only.csv"},
-    )
+async def download_anomalies_csv(dataset_id: str = Header(..., alias="X-Dataset-ID")):
+    return csv_response(get_dataset(dataset_id), 1, "anomalies_only.csv")

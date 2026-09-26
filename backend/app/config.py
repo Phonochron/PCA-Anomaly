@@ -1,23 +1,16 @@
-from pydantic_settings import BaseSettings
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Application settings."""
 
-    # Upload
-    max_upload_size_mb: int = 10
-    allowed_extensions: set[str] = {"csv"}
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-    # PCA
-    default_n_components: int = 3
-    default_threshold_percentile: float = 95.0
-
-    # CORS
+    max_upload_size_mb: int = Field(default=10, ge=1)
+    dataset_ttl_seconds: int = Field(default=3600, ge=1)
+    max_datasets_in_memory: int = Field(default=20, ge=1)
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
 
 
 settings = Settings()

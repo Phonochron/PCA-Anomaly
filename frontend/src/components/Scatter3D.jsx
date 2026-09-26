@@ -8,7 +8,7 @@ const ANOMALY_COLOR = 0xe86c6c;
 const AXIS_LENGTH = 2.5;
 
 function normalizePoints(points3d) {
-  if (!points3d?.length) return { positions: [], scale: 1 };
+  if (!points3d?.length) return [];
   const flat = points3d.flat();
   let min = Infinity, max = -Infinity;
   for (let i = 0; i < flat.length; i++) {
@@ -23,7 +23,7 @@ function normalizePoints(points3d) {
   for (const p of points3d) {
     positions.push((p[0] - cx) * scale, (p[1] - cx) * scale, (p[2] - cx) * scale);
   }
-  return { positions, scale };
+  return positions;
 }
 
 function addAxes(scene) {
@@ -34,29 +34,28 @@ function addAxes(scene) {
   const arrowHelperX = new THREE.ArrowHelper(dirX, origin, AXIS_LENGTH, 0xe86c6c);
   const arrowHelperY = new THREE.ArrowHelper(dirY, origin, AXIS_LENGTH, 0x6bcf7f);
   const arrowHelperZ = new THREE.ArrowHelper(dirZ, origin, AXIS_LENGTH, 0x7c9eff);
-  scene.add(arrowHelperX);
-  scene.add(arrowHelperY);
-  scene.add(arrowHelperZ);
+  const arrows = [arrowHelperX, arrowHelperY, arrowHelperZ];
+  scene.add(...arrows);
   return () => {
-    scene.remove(arrowHelperX);
-    scene.remove(arrowHelperY);
-    scene.remove(arrowHelperZ);
+    for (const arrow of arrows) {
+      scene.remove(arrow);
+      // ArrowHelper geometries are shared by Three.js; only materials are per instance.
+      arrow.line.material.dispose();
+      arrow.cone.material.dispose();
+    }
   };
 }
 
 export default function Scatter3D({
   points3d = [],
   labels = [],
-  rowIndices = [],
-  reconstructionErrors = [],
   anomalyDetails = [],
 }) {
   const containerRef = useRef(null);
-  const sceneRef = useRef(null);
   const [hoveredIndex, setHoveredIndex] = useState(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
 
-  const { positions, scale } = useMemo(
+  const positions = useMemo(
     () => normalizePoints(points3d),
     [points3d]
   );
@@ -77,8 +76,9 @@ export default function Scatter3D({
   useEffect(() => {
     if (!containerRef.current || positions.length === 0) return;
 
-    const width = containerRef.current.clientWidth;
-    const height = containerRef.current.clientHeight;
+    const container = containerRef.current;
+    const width = container.clientWidth;
+    const height = container.clientHeight;
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0d0f14);
@@ -103,7 +103,7 @@ export default function Scatter3D({
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    containerRef.current.appendChild(renderer.domElement);
+    container.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -131,19 +131,14 @@ export default function Scatter3D({
     renderer.domElement.addEventListener('pointermove', onPointerMove);
     renderer.domElement.addEventListener('pointerleave', onPointerLeave);
 
-    sceneRef.current = { scene, camera, renderer, points, controls };
-
-    const animate = () => {
-      requestAnimationFrame(animate);
+    renderer.setAnimationLoop(() => {
       controls.update();
       renderer.render(scene, camera);
-    };
-    animate();
+    });
 
     const onResize = () => {
-      if (!containerRef.current) return;
-      const w = containerRef.current.clientWidth;
-      const h = containerRef.current.clientHeight;
+      const w = container.clientWidth;
+      const h = container.clientHeight;
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
@@ -151,6 +146,7 @@ export default function Scatter3D({
     window.addEventListener('resize', onResize);
 
     return () => {
+      renderer.setAnimationLoop(null);
       window.removeEventListener('resize', onResize);
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
       renderer.domElement.removeEventListener('pointerleave', onPointerLeave);
@@ -159,8 +155,8 @@ export default function Scatter3D({
       geometry.dispose();
       material.dispose();
       renderer.dispose();
-      if (containerRef.current?.contains(renderer.domElement)) {
-        containerRef.current.removeChild(renderer.domElement);
+      if (container.contains(renderer.domElement)) {
+        container.removeChild(renderer.domElement);
       }
     };
   }, [positions, colors]);

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import styles from './AnomalyTable.module.css';
 
-export default function AnomalyTable({ anomalyDetails = [], featureNames = [] }) {
+export default function AnomalyTable({ anomalyDetails = [] }) {
   const [expandedRow, setExpandedRow] = useState(null);
 
   const anomaliesOnly = useMemo(
