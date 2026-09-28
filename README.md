@@ -181,6 +181,14 @@ Open [http://localhost:5173](http://localhost:5173). Vite proxies `/api` to the 
 
 The frontend uses `/api` in development. `frontend/.env.production` sets the existing Render backend URL for production builds. Set `VITE_API_BASE_URL` at build time when deploying against another backend; include the `/api` suffix. Add the deployed frontend origin to backend `CORS_ORIGINS`.
 
+### Deploy the frontend to Vercel
+
+Import this repository as a Vercel project and set **Root Directory** to `frontend` in the project setup (or **Settings > Build and Deployment > Root Directory** for an existing project). Use the **Vite** framework preset; its build command is `npm run build` and output directory is `dist`. Redeploy after changing the root directory.
+
+The repository root contains the research notebook and Python files, so deploying the root as a FastAPI project causes Vercel's "No python entrypoint found in default locations" error. The Vercel project here serves only the React frontend. `frontend/.env.production` points to the separately hosted API; override `VITE_API_BASE_URL` in Vercel's environment variables if that API URL changes, and include the `/api` suffix.
+
+The API must allow the exact Vercel site origin in `CORS_ORIGINS` (for example, `["https://your-project.vercel.app"]`). Set that variable on the backend host and redeploy the backend before testing upload and detection from the Vercel site.
+
 ### Usage flow
 
 1. **Upload** — Select a CSV with numeric feature columns. Optionally name a label column (`0` = normal, `1` = anomaly) so PCA fits on normal rows only.
